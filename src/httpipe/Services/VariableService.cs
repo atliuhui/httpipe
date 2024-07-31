@@ -48,5 +48,16 @@ namespace httpipe.Services
         {
             this.AddOrUpdate(key, this.RenderValue(template));
         }
+        public JToken GetContext(string key)
+        {
+            if (this.Context.TryGetValue(key, out var value))
+            {
+                return value;
+            }
+            else
+            {
+                return string.Empty;
+            }
+        }
     }
 }

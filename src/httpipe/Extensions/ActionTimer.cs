@@ -23,7 +23,7 @@ namespace httpipe.Extensions
         {
             this.stopwatch.Stop();
 
-            Log.Debug($"{DateTime.Now.ToString("s")}, {name} completed within {this.stopwatch.Elapsed.TotalMilliseconds} ms");
+            Log.Debug($"{DateTime.Now.ToString("s")}, {name} completed in {this.stopwatch.Elapsed.TotalMilliseconds} ms");
         }
     }
 }

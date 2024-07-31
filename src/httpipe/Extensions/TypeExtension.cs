@@ -31,13 +31,13 @@ namespace httpipe.Extensions
         }
         public static string StringValue(this Dictionary<string, string> context, string key)
         {
-            if (context.TryGetValue(key, out string value))
+            if (context.TryGetValue(key, out var value))
             {
                 return value;
             }
             else
             {
-                return null;
+                return string.Empty;
             }
         }
         public static string StringValue(this Dictionary<string, string> context, string key, string value)

@@ -14,31 +14,42 @@ namespace httpipe.Services
         const string LineSeparator = "\n";
         const string CommentSeparator = "#";
         const string VariableSeparator = "@";
-        const string FunctionSeparator = "$";
+        const string FunctionSeparator = "#$";
 
         readonly VariableService context;
+        readonly HttpClient client;
+        readonly List<int> assertHttpCodes;
 
-        public PipelineService(VariableService context)
+        public PipelineService(VariableService context, List<int> assertHttpCodes)
         {
             this.context = context;
+            this.client = new HttpClient();
+            this.assertHttpCodes = assertHttpCodes;
         }
 
         public void Execute(string text)
         {
-            var counter = 1;
-            using (var all = new ActionTimer($"Pipeline"))
+            var counter = 0;
+            using (var _ = new ActionTimer($"Pipeline"))
             {
                 foreach (var item in text.Trim().Split(BlockSeparator, StringSplitOptions.RemoveEmptyEntries))
                 {
-                    using (var timer = new ActionTimer($"Block#{counter++}", true))
+                    using (var __ = new ActionTimer($"Block#{counter++}", true))
                     {
-                        ExecuteBlock(item);
+                        var continued = ExecuteBlock(item);
+                        if (continued == false)
+                        {
+                            Log.Warning($"Block#{counter}");
+                            Log.Warning($"State = {this.context.GetContext("State").ToString()}");
+                            Log.Warning($"Response = {this.context.GetContext("Response").ToString()}");
+                            return;
+                        }
                     }
                     Log.Debug($"==========================");
                 }
             }
         }
-        private void ExecuteBlock(string text)
+        private bool ExecuteBlock(string text)
         {
             var lines = new Queue<string>(text.Trim().Split(LineSeparator));
             var currentPosition = TextPosition.Unknown;
@@ -122,16 +133,26 @@ namespace httpipe.Services
                 }
             }
 
-            if (string.IsNullOrEmpty(requestUri)) return;
+            if (string.IsNullOrEmpty(requestUri)) return true;
 
             message.RequestUri = new Uri(requestUri);
 
-            using (var timer = new ActionTimer(nameof(HttpClient)))
+            using (var _ = new ActionTimer(nameof(HttpClient)))
             {
-                var client = new HttpClient();
                 var response = client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead).Result;
+
+                Log.Information($"HTTP/{message.Version} {message.Method} {message.RequestUri} responded {(int)response.StatusCode}");
+
                 this.SetResponse(response);
+
+                if (!this.assertHttpCodes.Contains((int)response.StatusCode))
+                {
+                    this.context.AddOrUpdateContext("State", State.Terminated.ToString());
+                    return false;
+                }
             }
+
+            return true;
         }
 
         private void FuncDebugging()
@@ -150,7 +171,7 @@ namespace httpipe.Services
         }
         private void RunFunction(string line)
         {
-            if ("$debugging".StartsWith(line, StringComparison.OrdinalIgnoreCase))
+            if ($"{FunctionSeparator}debugging".StartsWith(line, StringComparison.OrdinalIgnoreCase))
             {
                 this.FuncDebugging();
             }
@@ -171,7 +192,7 @@ namespace httpipe.Services
             var address = line.Split(' ');
             requestUri = this.context.RenderValue(address.ElementAt(1).Trim());
             message.Method = new HttpMethod(address.ElementAt(0).Trim());
-            message.Version = new Version(address.ElementAt(2).Split('/').ElementAt(1).Trim());
+            message.Version = new Version((address.ElementAtOrDefault(2) ?? "HTTP/1.1").Split('/').ElementAt(1).Trim());
         }
         private void SetHeaders(HttpRequestMessage message, string line, ref string requestUri, ref string contentType)
         {
@@ -179,6 +200,7 @@ namespace httpipe.Services
             var header = new Queue<string>(line.Split(separator));
             var name = header.Dequeue().Trim();
             var value = string.Join(separator.ToString(), header.ToArray()).Trim();
+            var formatted = this.context.RenderValue(value);
             header.Clear();
 
             if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
@@ -191,35 +213,35 @@ namespace httpipe.Services
             }
             else if (name.Equals("Host", StringComparison.OrdinalIgnoreCase))
             {
-                if (!requestUri.StartsWith(value))
+                if (!requestUri.StartsWith(formatted))
                 {
-                    requestUri = $"http://{value}{requestUri}";
+                    requestUri = $"http://{formatted}{requestUri}";
                 }
 
-                message.Headers.TryAddWithoutValidation(name, value);
+                message.Headers.TryAddWithoutValidation(name, formatted);
             }
             else if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
             {
-                contentType = value;
+                contentType = formatted;
 
-                message.Headers.TryAddWithoutValidation(name, value);
+                message.Headers.TryAddWithoutValidation(name, formatted);
             }
             else if (name.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
             {
-                var authorization = value.Split(' ');
+                var authorization = formatted.Split(' ');
                 var schema = authorization.ElementAt(0).Trim();
                 var token = authorization.ElementAt(1).Trim();
 
                 if (schema.Equals("Basic", StringComparison.OrdinalIgnoreCase) && token.Contains(':'))
                 {
-                    value = $"Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes(token))}";
+                    formatted = $"Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes(token))}";
                 }
 
-                message.Headers.TryAddWithoutValidation(name, value);
+                message.Headers.TryAddWithoutValidation(name, formatted);
             }
             else
             {
-                message.Headers.TryAddWithoutValidation(name, this.context.RenderValue(value));
+                message.Headers.TryAddWithoutValidation(name, this.context.RenderValue(formatted));
             }
         }
         private void SetContent(HttpRequestMessage message, string contentType, string contentText, ref string requestUri)
@@ -364,5 +386,11 @@ namespace httpipe.Services
         Content,
         Variable,
         Function,
+    }
+    enum State
+    {
+        Completed,
+        Failed,
+        Terminated,
     }
 }
