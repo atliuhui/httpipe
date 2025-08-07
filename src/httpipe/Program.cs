@@ -15,16 +15,13 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 
 var configuration = XDocument.Load(GetConfigName());
-var assertHttpCodes = GetValue("assert:csv:httpCodes", configuration)?.Split(',')
-    .Select(item => int.Parse(item.Trim())).ToList()
-    ?? Enumerable.Empty<int>().ToList();
 var context = new Dictionary<string, JToken>
 {
     ["CurrentDirectory"] = GetCurrentDirectory(),
     ["State"] = State.Completed.ToString(),
 };
 var vars = new VariableService(context);
-var pipe = new PipelineService(vars, assertHttpCodes);
+var pipe = new PipelineService(vars);
 
 #if DEBUG
 var path = @"samples\hello.http";

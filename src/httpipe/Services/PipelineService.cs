@@ -18,13 +18,11 @@ namespace httpipe.Services
 
         readonly VariableService context;
         readonly HttpClient client;
-        readonly List<int> assertHttpCodes;
 
-        public PipelineService(VariableService context, List<int> assertHttpCodes)
+        public PipelineService(VariableService context)
         {
             this.context = context;
             this.client = new HttpClient();
-            this.assertHttpCodes = assertHttpCodes;
         }
 
         public void Execute(string text)
@@ -37,10 +35,10 @@ namespace httpipe.Services
                     using (var __ = new ActionTimer($"Block#{counter++}", true))
                     {
                         var continued = ExecuteBlock(item);
-                        if (continued == false)
+                        var state = Enum.Parse<State>(this.context.GetContext("State").ToString());
+                        if (continued == false || state != State.Completed)
                         {
                             Log.Warning($"Block#{counter}");
-                            Log.Warning($"State = {this.context.GetContext("State").ToString()}");
                             Log.Warning($"Response = {this.context.GetContext("Response").ToString()}");
                             return;
                         }
@@ -96,7 +94,8 @@ namespace httpipe.Services
                         break;
                     case TextPosition.Function:
                         currentPosition = TextPosition.Unknown;
-                        RunFunction(currentLine);
+                        var continued = RunFunction(currentLine);
+                        if (continued == false) return false;
                         break;
                     case TextPosition.Route:
                         if (string.IsNullOrEmpty(nextLine?.Trim()))
@@ -144,18 +143,12 @@ namespace httpipe.Services
                 Log.Information($"HTTP/{message.Version} {message.Method} {message.RequestUri} responded {(int)response.StatusCode}");
 
                 this.SetResponse(response);
-
-                if (!this.assertHttpCodes.Contains((int)response.StatusCode))
-                {
-                    this.context.AddOrUpdateContext("State", State.Terminated.ToString());
-                    return false;
-                }
             }
 
             return true;
         }
 
-        private void FuncDebugging()
+        private bool FuncDebugging(string[] args)
         {
             Log.Information($"---context---");
             foreach (var item in this.context.Context)
@@ -168,16 +161,35 @@ namespace httpipe.Services
                 Log.Information($"{item.Key}={item.Value}");
             }
             Log.Information($"-------------");
+
+            return true;
         }
-        private void RunFunction(string line)
+        private bool FuncAssert(string[] args)
         {
-            if ($"{FunctionSeparator}debugging".StartsWith(line, StringComparison.OrdinalIgnoreCase))
+            var response = this.context.GetContext("Response");
+            var code = response.Value<int>("Code");
+
+            var result = args.Contains(code.ToString(), StringComparer.OrdinalIgnoreCase);
+            if (result == false)
             {
-                this.FuncDebugging();
+                Log.Warning($"assert not passed. {code} is not in [{string.Join(',', args)}]");
+            }
+            return result;
+        }
+        private bool RunFunction(string line)
+        {
+            if (line.StartsWith($"{FunctionSeparator}debugging", StringComparison.OrdinalIgnoreCase))
+            {
+                return this.FuncDebugging(Enumerable.Empty<string>().ToArray());
+            }
+            else if (line.StartsWith($"{FunctionSeparator}assert", StringComparison.OrdinalIgnoreCase))
+            {
+                return this.FuncAssert(line.Split(':', StringSplitOptions.TrimEntries).ElementAt(1).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
             }
             else
             {
                 Log.Error($"unknown function {line}");
+                return false;
             }
         }
         private void SetVariable(string line)
