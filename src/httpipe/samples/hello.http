@@ -1,7 +1,9 @@
 # For more info on HTTP files go to https://aka.ms/vs/httpfile
 @host=baidu.com
 
-GET http://{{host}} HTTP/1.1
+###
+
+GET {{scheme}}://{{host}} HTTP/1.1
 
 ###
 

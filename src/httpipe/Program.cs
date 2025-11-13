@@ -1,6 +1,6 @@
 ﻿// See https://aka.ms/new-console-template for more information
-using httpipe.Services;
-using Newtonsoft.Json.Linq;
+using Httpipe.Extensions;
+using Httpipe.Pipeline;
 using Serilog;
 using System.Xml.Linq;
 using System.Xml.XPath;
@@ -14,27 +14,41 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .CreateLogger();
 
-var configuration = XDocument.Load(GetConfigName());
-var context = new Dictionary<string, JToken>
-{
-    ["CurrentDirectory"] = GetCurrentDirectory(),
-    ["State"] = State.Completed.ToString(),
-};
-var vars = new VariableService(context);
-var pipe = new PipelineService(vars);
-
 #if DEBUG
 var path = @"samples\hello.http";
+var env = "local";
 #else
-var path = args.ElementAtOrDefault(0) ?? throw new ArgumentNullException("path");
+var path = args.ElementAt(0);
+var env = args.ElementAtOrDefault(1);
 #endif
 
-var text = File.ReadAllText(path);
-pipe.Execute(text);
+var configuration = XDocument.Load(GetConfigName());
+
+using (var meter = new TimeMeter(Path.GetFileNameWithoutExtension(path)))
+{
+    var builder = new TaskBuilder();
+    var task = builder.UseHttpTask(path).Build();
+
+    var arguments = new HttpTaskArguments
+    {
+        ScriptPath = path,
+        CurrentDirectory = GetCurrentDirectory(),
+    };
+    var context = new HttpTaskContext
+    {
+    };
+    context.LoadVariables(path, env);
+    task(arguments, context).Wait();
+
+    Log.Debug($"{(float)GC.GetTotalMemory(false) / 1024 / 1024:N2} MB");
+}
 
 static string GetCurrentDirectory()
 {
+    ArgumentNullException.ThrowIfNull(Environment.ProcessPath);
     var file = new FileInfo(Environment.ProcessPath);
+
+    ArgumentNullException.ThrowIfNull(file.Directory);
     return file.Directory.FullName;
 }
 static string GetConfigName()
